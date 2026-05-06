@@ -1,0 +1,33 @@
+# Local environments
+.venv/
+venv/
+env/
+
+# Datasets (download via Kaggle in Colab / README)
+**/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets (never commit API keys)
+kaggle.json
+**/kaggle.json
+
+# Optional: uncomment if logs are noisy
+# prnu_project/experiments/logs/*.log

@@ -1,0 +1,51 @@
+# Reproducibility
+seed: 42
+
+# Paths (relative to project root unless absolute)
+dresden_root: data/raw/dresden/Dresden_Exp
+ieee_sp_root: data/raw/ieee_sp
+fingerprint_dir: data/processed/fingerprints
+patch_cache_hint: data/processed/patches
+
+# Data
+patch_size: 128
+min_images_per_device: 50
+train_ratio: 0.60
+val_ratio: 0.20
+test_ratio: 0.20
+
+# PRNU
+wiener_window: 3
+fingerprint_epsilon: 1e-6
+# Speed/memory: downscale before Wiener; cap images per device for K_d (full-res is very slow)
+fingerprint_resize_max_dim: 2048
+fingerprint_max_images_per_device: 40
+
+# CNN Training
+cnn_lr: 1e-4
+cnn_weight_decay: 1e-4
+cnn_epochs: 30
+cnn_batch_size: 64
+
+# Siamese Training
+siamese_lr: 1e-4
+siamese_margin: 1.0
+siamese_epochs: 30
+siamese_batch_size: 32
+siamese_embedding_dim: 256
+
+# Compression
+jpeg_quality_levels: [95, 90, 80, 70, 60, 50, 40, 30]
+resize_scale_factors: [0.9, 0.8, 0.7, 0.6, 0.5]
+whatsapp_quality: 77
+whatsapp_max_dim: 1600
+flickr_quality: 92
+flickr_max_dim: 2048
+
+# Calibration
+ece_bins: 15
+
+# Sampling (set use_sampling: false to use the full dataset)
+use_sampling: true
+sample_fraction: 0.20      # 20% of full dataset
+sample_min_per_class: 30   # never drop a class below 30 images

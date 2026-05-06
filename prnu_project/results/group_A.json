@@ -1,0 +1,105 @@
+{
+  "experiment": "group_A",
+  "config": {
+    "seed": 42,
+    "dresden_root": "data/raw/dresden/Dresden_Exp",
+    "ieee_sp_root": "data/raw/ieee_sp",
+    "fingerprint_dir": "data/processed/fingerprints",
+    "patch_cache_hint": "data/processed/patches",
+    "patch_size": 128,
+    "min_images_per_device": 50,
+    "train_ratio": 0.6,
+    "val_ratio": 0.2,
+    "test_ratio": 0.2,
+    "wiener_window": 3,
+    "fingerprint_epsilon": "1e-6",
+    "fingerprint_resize_max_dim": 2048,
+    "fingerprint_max_images_per_device": 40,
+    "cnn_lr": "1e-4",
+    "cnn_weight_decay": "1e-4",
+    "cnn_epochs": 1,
+    "cnn_batch_size": 64,
+    "siamese_lr": "1e-4",
+    "siamese_margin": 1.0,
+    "siamese_epochs": 1,
+    "siamese_batch_size": 32,
+    "siamese_embedding_dim": 256,
+    "jpeg_quality_levels": [
+      95,
+      90,
+      80,
+      70,
+      60,
+      50,
+      40,
+      30
+    ],
+    "resize_scale_factors": [
+      0.9,
+      0.8,
+      0.7,
+      0.6,
+      0.5
+    ],
+    "whatsapp_quality": 77,
+    "whatsapp_max_dim": 1600,
+    "flickr_quality": 92,
+    "flickr_max_dim": 2048,
+    "ece_bins": 15,
+    "use_sampling": true,
+    "sample_fraction": 0.1,
+    "sample_min_per_class": 30
+  },
+  "git_hash": "unknown",
+  "A1": {
+    "NCC": {
+      "top1": 0.08531157270029674,
+      "top5": 0.36350148367952523,
+      "macro_f1": 0.04348042127967177
+    },
+    "CNN": {
+      "top1": 0.8227002967359051,
+      "top5": 0.9940652818991098,
+      "macro_f1": 0.3928660949071593
+    },
+    "Siamese": {
+      "top1": 0.5304154302670623,
+      "top5": 0.93026706231454,
+      "macro_f1": 0.1982954085562449
+    }
+  },
+  "A2": {
+    "NCC": {
+      "top1": 0.2051186943620178,
+      "top5": 0.4922106824925816,
+      "macro_f1": 0.10009916267131082
+    },
+    "CNN": {
+      "top1": 0.10274480712166173,
+      "top5": 0.5660237388724036,
+      "macro_f1": 0.05665042714049656
+    },
+    "Siamese": {
+      "top1": 0.11758160237388723,
+      "top5": 0.39688427299703266,
+      "macro_f1": 0.04780003610452447
+    }
+  },
+  "A3": {
+    "NCC": {
+      "top1": 0.2051186943620178,
+      "top5": 0.4922106824925816,
+      "macro_f1": 0.10009916267131082
+    },
+    "CNN": {
+      "top1": 0.245919881305638,
+      "top5": 0.5867952522255193,
+      "macro_f1": 0.09123203942778473
+    },
+    "Siamese": {
+      "top1": 0.048590504451038574,
+      "top5": 0.4873887240356083,
+      "macro_f1": 0.025928152923927535
+    }
+  }
+}

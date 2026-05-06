@@ -1,0 +1,24 @@
+=== Config: configs/cpu.yaml ===
+=== Patch cache dir: /Users/geeshithamamidi/team-project-machinelearning/prnu_project/data/processed/residual_patches ===
+=== Max patches/image: 8 ===
+=== Max devices flag: <none> ===
+
+>>> [group_A] starting at 2026-04-24 08:46:32
+<<< [group_A] exit=0 at 2026-04-25 04:14:54  (log: /Users/geeshithamamidi/team-project-machinelearning/prnu_project/experiments/logs/group_A.log)
+>>> [group_B] starting at 2026-04-25 04:14:54
+<<< [group_B] exit=0 at 2026-04-25 08:03:28  (log: /Users/geeshithamamidi/team-project-machinelearning/prnu_project/experiments/logs/group_B.log)
+>>> [group_C] starting at 2026-04-25 08:03:28
+./scripts/run_all_groups.sh: line 23: 45910 Killed: 9               python "$@" 2>&1
+<<< [group_C] exit=137 at 2026-04-29 13:31:38  (log: /Users/geeshithamamidi/team-project-machinelearning/prnu_project/experiments/logs/group_C.log)
+[group_C] FAILED, continuing to next group
+>>> [group_D] starting at 2026-04-29 13:31:38
+./scripts/run_all_groups.sh: line 23: 15316 Killed: 9               python "$@" 2>&1
+<<< [group_D] exit=137 at 2026-04-29 13:33:22  (log: /Users/geeshithamamidi/team-project-machinelearning/prnu_project/experiments/logs/group_D.log)
+[group_D] FAILED, continuing to next group
+
+=== ALL DONE at Wed Apr 29 13:33:22 PDT 2026 ===
+total 16
+drwxr-xr-x   4 geeshithamamidi  staff   128 Apr 25 08:03 .
+drwxr-xr-x  14 geeshithamamidi  staff   448 Apr 28 22:17 ..
+-rw-r--r--   1 geeshithamamidi  staff  2411 Apr 25 04:14 group_A.json
+-rw-r--r--   1 geeshithamamidi  staff  1594 Apr 25 08:03 group_B.json

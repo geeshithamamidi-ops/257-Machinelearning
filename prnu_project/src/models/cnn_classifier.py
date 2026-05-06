@@ -1,0 +1,177 @@
+"""
+Residual CNN classifier (ResNet-18 adapted for 1-channel PRNU patches).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+
+
+class ResidualCNN(nn.Module):
+    """
+    ResNet-18 modified for single-channel 128x128 PRNU residual patches.
+
+    - First conv: 1 input channel, 3x3, stride 1, padding 1
+    - Removes the initial max-pool (spatial size is small)
+    - No ImageNet pretraining
+    """
+
+    def __init__(self, num_classes: int) -> None:
+        """
+        Parameters
+        ----------
+        num_classes : int
+            Number of device classes.
+        """
+        super().__init__()
+        from torchvision.models import resnet18
+
+        m = resnet18(weights=None)
+        m.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        m.maxpool = nn.Identity()
+        m.fc = nn.Linear(m.fc.in_features, num_classes)
+        self.backbone = m
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward logits.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Nx1xHxW tensor.
+
+        Returns
+        -------
+        torch.Tensor
+            N x num_classes logits.
+        """
+        return self.backbone(x)
+
+
+class CNNClassifier:
+    """Training wrapper for ``ResidualCNN``."""
+
+    def __init__(
+        self,
+        num_classes: int,
+        device: str | torch.device = "cpu",
+        lr: float = 1e-4,
+        weight_decay: float = 1e-4,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        num_classes : int
+            Class count.
+        device : str | torch.device
+            Torch device.
+        lr : float
+            Adam learning rate.
+        weight_decay : float
+            L2 penalty.
+        """
+        self.device = torch.device(device)
+        self.model = ResidualCNN(num_classes).to(self.device)
+        self.opt = torch.optim.Adam(
+            self.model.parameters(), lr=lr, weight_decay=weight_decay
+        )
+        self.loss_fn = nn.CrossEntropyLoss()
+
+    def train_epoch(self, loader: DataLoader) -> float:
+        """
+        Run one training epoch.
+
+        Parameters
+        ----------
+        loader : DataLoader
+            Yields ``(batch_x, batch_y, ...)``.
+
+        Returns
+        -------
+        float
+            Mean loss.
+        """
+        self.model.train()
+        total, n = 0.0, 0
+        for batch in loader:
+            x = batch[0].to(self.device)
+            y = batch[1].to(self.device)
+            self.opt.zero_grad(set_to_none=True)
+            logits = self.model(x)
+            loss = self.loss_fn(logits, y)
+            loss.backward()
+            self.opt.step()
+            total += float(loss.item()) * x.size(0)
+            n += x.size(0)
+        return total / max(1, n)
+
+    @torch.no_grad()
+    def evaluate(self, loader: DataLoader) -> dict[str, float]:
+        """
+        Evaluate accuracy on a loader.
+
+        Parameters
+        ----------
+        loader : DataLoader
+            Patch loader.
+
+        Returns
+        -------
+        dict[str, float]
+            ``loss`` and ``accuracy`` keys.
+        """
+        self.model.eval()
+        total_loss, correct, seen = 0.0, 0, 0
+        for batch in loader:
+            x = batch[0].to(self.device)
+            y = batch[1].to(self.device)
+            logits = self.model(x)
+            loss = self.loss_fn(logits, y)
+            pred = logits.argmax(dim=1)
+            correct += int((pred == y).sum().item())
+            seen += x.size(0)
+            total_loss += float(loss.item()) * x.size(0)
+        return {
+            "loss": total_loss / max(1, seen),
+            "accuracy": correct / max(1, seen),
+        }
+
+    def save(self, path: str | Path) -> None:
+        """
+        Save model weights.
+
+        Parameters
+        ----------
+        path : str | Path
+            Destination ``.pt`` path.
+
+        Returns
+        -------
+        None
+        """
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.model.state_dict(), p)
+
+    def load(self, path: str | Path) -> None:
+        """
+        Load model weights.
+
+        Parameters
+        ----------
+        path : str | Path
+            ``.pt`` file from ``save``.
+
+        Returns
+        -------
+        None
+        """
+        state = torch.load(path, map_location=self.device)
+        self.model.load_state_dict(state)

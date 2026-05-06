@@ -1,0 +1,9 @@
+=== group_D === Wed Apr 29 13:31:38 PDT 2026 ===
+cmd: python experiments/run_group_D.py --config configs/cpu.yaml
+
+[sampler] train reduced: 4850 -> 558 (11.5%), classes=13, per-class=[30..136], below-floor classes=0
+Fingerprints(D):   0%|          | 0/13 [00:00<?, ?it/s]Fingerprints(D): 100%|██████████| 13/13 [00:00<00:00, 35337.62it/s]
+
+=== group_D exit=137 at Wed Apr 29 13:33:22 PDT 2026 ===
+/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/multiprocessing/resource_tracker.py:396: UserWarning: resource_tracker: There appear to be 15 leaked semaphore objects to clean up at shutdown: {'/loky-15316-seerwmdd', '/loky-15316-aofw87no', '/loky-15316-y4e5k42h', '/loky-15316-q4h_i8fb', '/loky-15316-jlqst4ot', '/loky-15316-zgarr6fw', '/loky-15316-7t4q2ge8', '/loky-15316-wt29988_', '/loky-15316-u14pmrnd', '/loky-15316-8y4241lz', '/loky-15316-3_fxeq2m', '/loky-15316-0fv7tcoi', '/loky-15316-_g9l_xpn', '/loky-15316-gtbose_j', '/loky-15316-0n6mksti'}
+  warnings.warn(
