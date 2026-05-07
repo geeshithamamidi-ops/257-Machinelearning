@@ -101,8 +101,8 @@ class CNNClassifier:
         self.model.train()
         total, n = 0.0, 0
         for batch in loader:
-            x = batch[0].to(self.device)
-            y = batch[1].to(self.device)
+            x = batch[0].to(self.device, non_blocking=True)
+            y = batch[1].to(self.device, non_blocking=True)
             self.opt.zero_grad(set_to_none=True)
             logits = self.model(x)
             loss = self.loss_fn(logits, y)
@@ -130,8 +130,8 @@ class CNNClassifier:
         self.model.eval()
         total_loss, correct, seen = 0.0, 0, 0
         for batch in loader:
-            x = batch[0].to(self.device)
-            y = batch[1].to(self.device)
+            x = batch[0].to(self.device, non_blocking=True)
+            y = batch[1].to(self.device, non_blocking=True)
             logits = self.model(x)
             loss = self.loss_fn(logits, y)
             pred = logits.argmax(dim=1)

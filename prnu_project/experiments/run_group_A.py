@@ -53,6 +53,32 @@ from src.prnu_extraction import (
 from src.train import get_git_hash, load_config, seed_everything, train_cnn, train_siamese
 
 
+def _resolve_device(requested: str) -> str:
+    """
+    Resolve requested runtime device with CUDA availability checks.
+
+    Parameters
+    ----------
+    requested : str
+        CLI device argument (e.g., ``"cpu"``, ``"cuda"``, ``"cuda:0"``).
+
+    Returns
+    -------
+    str
+        Concrete device string for torch modules.
+    """
+    req = str(requested).strip().lower()
+    if req.startswith("cuda"):
+        if torch.cuda.is_available():
+            return requested
+        print(
+            "WARNING: CUDA requested but not available; falling back to CPU.",
+            file=sys.stderr,
+        )
+        return "cpu"
+    return requested
+
+
 def _project_paths(cfg: dict[str, Any], project_root: Path) -> dict[str, Path]:
     """
     Resolve configured paths against the project root.
@@ -295,6 +321,8 @@ def main() -> None:
         help="Override sample_fraction from config (e.g. 0.10-0.30).",
     )
     args = parser.parse_args()
+    run_device = _resolve_device(args.device)
+    use_cuda = str(run_device).startswith("cuda")
 
     project_root = ROOT
     cfg = load_config(project_root / args.config)
@@ -350,12 +378,24 @@ def main() -> None:
 
     inv_dev = {sanitize_device_id(k): v for k, v in mapping.items()}
 
-    denoiser = WienerDenoiser(window_size=int(cfg["wiener_window"]))
+    wiener_backend = str(cfg.get("wiener_backend", "scipy"))
+    wiener_torch_device = str(cfg.get("wiener_torch_device", "cpu"))
+    denoiser = WienerDenoiser(
+        window_size=int(cfg["wiener_window"]),
+        backend=wiener_backend,
+        torch_device=wiener_torch_device,
+    )
     est = fingerprint_estimator_from_config(denoiser, cfg)
     paths["fingerprint_dir"].mkdir(parents=True, exist_ok=True)
     _estimate_fingerprints(splits["train"], est, paths["fingerprint_dir"])
 
-    ncc = NCCBaseline(denoiser=WienerDenoiser(window_size=int(cfg["wiener_window"])))
+    ncc = NCCBaseline(
+        denoiser=WienerDenoiser(
+            window_size=int(cfg["wiener_window"]),
+            backend=wiener_backend,
+            torch_device=wiener_torch_device,
+        )
+    )
     ncc.fit(paths["fingerprint_dir"])
 
     ps = int(cfg["patch_size"])
@@ -387,33 +427,40 @@ def main() -> None:
         )
         raise SystemExit(1)
 
+    loader_workers = 2
+    loader_pin_memory = use_cuda
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=True,
-        num_workers=2,
+        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=False,
+        pin_memory=loader_pin_memory,
+        persistent_workers=loader_workers > 0,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=2,
+        num_workers=loader_workers,
         collate_fn=prnu_collate,
+        pin_memory=loader_pin_memory,
+        persistent_workers=loader_workers > 0,
     )
     test_loader = DataLoader(
         test_ds,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=2,
+        num_workers=loader_workers,
         collate_fn=prnu_collate,
+        pin_memory=loader_pin_memory,
+        persistent_workers=loader_workers > 0,
     )
 
     num_classes = len(mapping)
     cnn = CNNClassifier(
         num_classes,
-        device=args.device,
+        device=run_device,
         lr=float(cfg["cnn_lr"]),
         weight_decay=float(cfg["cnn_weight_decay"]),
     )
@@ -427,7 +474,7 @@ def main() -> None:
     siam = SiameseClassifier(
         num_classes=num_classes,
         embedding_dim=int(cfg["siamese_embedding_dim"]),
-        device=args.device,
+        device=run_device,
         lr=float(cfg["siamese_lr"]),
         margin=float(cfg["siamese_margin"]),
         mode="triplet",
@@ -436,8 +483,10 @@ def main() -> None:
         train_ds,
         batch_size=int(cfg["siamese_batch_size"]),
         shuffle=True,
-        num_workers=2,
+        num_workers=loader_workers,
         collate_fn=prnu_collate,
+        pin_memory=loader_pin_memory,
+        persistent_workers=loader_workers > 0,
     )
     train_siamese(siam, siam_train, epochs=int(cfg["siamese_epochs"]))
     siam.fit_centroids(siam_train)
@@ -477,15 +526,19 @@ def main() -> None:
         test_ds_wa,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=2,
+        num_workers=loader_workers,
         collate_fn=prnu_collate,
+        pin_memory=loader_pin_memory,
+        persistent_workers=loader_workers > 0,
     )
     tl_fl = DataLoader(
         test_ds_fl,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=2,
+        num_workers=loader_workers,
         collate_fn=prnu_collate,
+        pin_memory=loader_pin_memory,
+        persistent_workers=loader_workers > 0,
     )
 
     A2_wa = _metrics_block(
@@ -527,19 +580,23 @@ def main() -> None:
         train_ds_a3,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=True,
-        num_workers=2,
+        num_workers=loader_workers,
         collate_fn=prnu_collate,
+        pin_memory=loader_pin_memory,
+        persistent_workers=loader_workers > 0,
     )
     val_loader_a3 = DataLoader(
         val_ds_a3,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=2,
+        num_workers=loader_workers,
         collate_fn=prnu_collate,
+        pin_memory=loader_pin_memory,
+        persistent_workers=loader_workers > 0,
     )
     cnn_a3 = CNNClassifier(
         num_classes,
-        device=args.device,
+        device=run_device,
         lr=float(cfg["cnn_lr"]),
         weight_decay=float(cfg["cnn_weight_decay"]),
     )
@@ -552,7 +609,7 @@ def main() -> None:
     siam_a3 = SiameseClassifier(
         num_classes=num_classes,
         embedding_dim=int(cfg["siamese_embedding_dim"]),
-        device=args.device,
+        device=run_device,
         lr=float(cfg["siamese_lr"]),
         margin=float(cfg["siamese_margin"]),
         mode="triplet",
@@ -561,8 +618,10 @@ def main() -> None:
         train_ds_a3,
         batch_size=int(cfg["siamese_batch_size"]),
         shuffle=True,
-        num_workers=2,
+        num_workers=loader_workers,
         collate_fn=prnu_collate,
+        pin_memory=loader_pin_memory,
+        persistent_workers=loader_workers > 0,
     )
     train_siamese(siam_a3, siam_train_a3, epochs=int(cfg["siamese_epochs"]))
     siam_a3.fit_centroids(siam_train_a3)

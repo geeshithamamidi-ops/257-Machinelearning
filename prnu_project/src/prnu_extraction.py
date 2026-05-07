@@ -9,6 +9,8 @@ from typing import Iterable, Optional
 
 import cv2
 import numpy as np
+import torch
+import torch.nn.functional as F
 from scipy.signal import wiener
 
 from src.preprocessing import load_image_rgb_float
@@ -48,7 +50,12 @@ class WienerDenoiser:
     Residual: W = I - F(I), where F is Wiener filtering on luminance.
     """
 
-    def __init__(self, window_size: int = 3) -> None:
+    def __init__(
+        self,
+        window_size: int = 3,
+        backend: str = "scipy",
+        torch_device: str | torch.device = "cpu",
+    ) -> None:
         """
         Parameters
         ----------
@@ -56,6 +63,33 @@ class WienerDenoiser:
             Odd-ish local window for ``scipy.signal.wiener`` (mysize).
         """
         self.window_size = int(window_size)
+        self.backend = str(backend).strip().lower()
+        self.torch_device = torch.device(torch_device)
+
+    def _wiener_torch_channel(self, ch: np.ndarray) -> np.ndarray:
+        """
+        Approximate Wiener filtering with local moments in PyTorch.
+
+        Parameters
+        ----------
+        ch : np.ndarray
+            Single-channel image in float64.
+
+        Returns
+        -------
+        np.ndarray
+            Filtered channel in float64.
+        """
+        t = torch.from_numpy(ch).to(self.torch_device, dtype=torch.float32)[None, None, ...]
+        k = int(self.window_size)
+        pad = k // 2
+        local_mean = F.avg_pool2d(t, kernel_size=k, stride=1, padding=pad)
+        local_sq_mean = F.avg_pool2d(t * t, kernel_size=k, stride=1, padding=pad)
+        local_var = torch.clamp(local_sq_mean - local_mean * local_mean, min=0.0)
+        noise = local_var.mean()
+        gain = torch.clamp(local_var - noise, min=0.0) / (local_var + 1e-8)
+        filt = local_mean + gain * (t - local_mean)
+        return filt[0, 0].detach().cpu().numpy().astype(np.float64)
 
     def denoise(self, img: np.ndarray) -> np.ndarray:
         """
@@ -77,9 +111,12 @@ class WienerDenoiser:
         out = np.zeros_like(x, dtype=np.float64)
         ws = (self.window_size, self.window_size)
         for c in range(3):
-            # Tiny offset avoids scipy wiener divide-by-zero on flat regions (uniform patches).
             ch = x[..., c] + 1e-4
-            filt = wiener(ch, mysize=ws)
+            if self.backend == "torch":
+                filt = self._wiener_torch_channel(ch)
+            else:
+                # Tiny offset avoids scipy wiener divide-by-zero on flat regions (uniform patches).
+                filt = wiener(ch, mysize=ws)
             out[..., c] = np.nan_to_num(filt, nan=ch, posinf=ch, neginf=ch)
         return out.astype(np.float32)
 

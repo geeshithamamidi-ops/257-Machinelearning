@@ -119,7 +119,7 @@ def image_level_predictions_cnn(
     labels: dict[str, int] = {}
     with torch.no_grad():
         for x, y, paths in loader:
-            x = x.to(device)
+            x = x.to(device, non_blocking=True)
             prob = F.softmax(clf.model(x), dim=1).detach().cpu()
             for i in range(len(paths)):
                 pt = paths[i]
@@ -161,7 +161,7 @@ def image_level_predictions_siamese(
     labels: dict[str, int] = {}
     with torch.no_grad():
         for x, y, paths in loader:
-            x = x.to(device)
+            x = x.to(device, non_blocking=True)
             z = clf.encoder(x).detach().cpu()
             for i in range(len(paths)):
                 pt = paths[i]

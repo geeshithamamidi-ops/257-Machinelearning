@@ -241,8 +241,8 @@ class SiameseClassifier:
         self.encoder.train()
         total, n = 0.0, 0
         for batch in loader:
-            x = batch[0].to(self.device)
-            y = batch[1].to(self.device)
+            x = batch[0].to(self.device, non_blocking=True)
+            y = batch[1].to(self.device, non_blocking=True)
             z = self.encoder(x)
             loss_t: Optional[torch.Tensor] = None
             if self.mode == "triplet":
@@ -282,8 +282,8 @@ class SiameseClassifier:
         sums: dict[int, torch.Tensor] = {}
         counts: dict[int, int] = {}
         for batch in loader:
-            x = batch[0].to(self.device)
-            y = batch[1].to(self.device)
+            x = batch[0].to(self.device, non_blocking=True)
+            y = batch[1].to(self.device, non_blocking=True)
             z = self.encoder(x)
             for lab in y.unique():
                 m = lab.item()
