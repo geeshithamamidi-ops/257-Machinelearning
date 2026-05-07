@@ -1,0 +1,47 @@
+# Like default.yaml but uses ~half the TRAINING images (stratified by device).
+# Val/test splits are unchanged unless you also pass --max-devices.
+#
+# Run:
+#   python experiments/run_group_A.py --config configs/half_dataset.yaml --device cuda
+
+seed: 42
+
+dresden_root: data/raw/dresden/Dresden_Exp
+ieee_sp_root: data/raw/ieee_sp
+fingerprint_dir: data/processed/fingerprints
+patch_cache_hint: data/processed/patches
+
+patch_size: 128
+min_images_per_device: 50
+train_ratio: 0.60
+val_ratio: 0.20
+test_ratio: 0.20
+
+wiener_window: 3
+fingerprint_epsilon: 1e-6
+fingerprint_resize_max_dim: 2048
+fingerprint_max_images_per_device: 20
+
+cnn_lr: 1e-4
+cnn_weight_decay: 1e-4
+cnn_epochs: 30
+cnn_batch_size: 64
+
+siamese_lr: 1e-4
+siamese_margin: 1.0
+siamese_epochs: 30
+siamese_batch_size: 32
+siamese_embedding_dim: 256
+
+jpeg_quality_levels: [95, 90, 80, 70, 60, 50, 40, 30]
+resize_scale_factors: [0.9, 0.8, 0.7, 0.6, 0.5]
+whatsapp_quality: 77
+whatsapp_max_dim: 1600
+flickr_quality: 92
+flickr_max_dim: 2048
+
+ece_bins: 15
+
+use_sampling: true
+sample_fraction: 0.50
+sample_min_per_class: 30
