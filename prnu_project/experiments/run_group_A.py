@@ -310,6 +310,18 @@ def main() -> None:
     parser.add_argument("--max-patches-per-image", type=int, default=None)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=2,
+        help="DataLoader worker processes.",
+    )
+    parser.add_argument(
+        "--prefetch-factor",
+        type=int,
+        default=2,
+        help="Batches prefetched per worker (ignored when num_workers=0).",
+    )
+    parser.add_argument(
         "--no-sampling",
         action="store_true",
         help="Disable the stratified train-split sampler regardless of config.",
@@ -427,34 +439,46 @@ def main() -> None:
         )
         raise SystemExit(1)
 
-    loader_workers = 2
+    loader_workers = max(0, int(args.num_workers))
+    if (
+        str(wiener_backend).strip().lower() == "torch"
+        and str(wiener_torch_device).strip().lower().startswith("cuda")
+    ):
+        # Colab/PyTorch cannot safely initialize CUDA inside forked DataLoader workers.
+        loader_workers = 0
+        print(
+            "INFO: Using num_workers=0 because wiener_backend=torch on CUDA "
+            "is not compatible with forked DataLoader workers.",
+            flush=True,
+        )
     loader_pin_memory = use_cuda
+    loader_kwargs: dict[str, Any] = {
+        "num_workers": loader_workers,
+        "pin_memory": loader_pin_memory,
+    }
+    if loader_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = max(1, int(args.prefetch_factor))
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=True,
-        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=loader_pin_memory,
-        persistent_workers=loader_workers > 0,
+        **loader_kwargs,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=loader_pin_memory,
-        persistent_workers=loader_workers > 0,
+        **loader_kwargs,
     )
     test_loader = DataLoader(
         test_ds,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=loader_pin_memory,
-        persistent_workers=loader_workers > 0,
+        **loader_kwargs,
     )
 
     num_classes = len(mapping)
@@ -483,10 +507,8 @@ def main() -> None:
         train_ds,
         batch_size=int(cfg["siamese_batch_size"]),
         shuffle=True,
-        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=loader_pin_memory,
-        persistent_workers=loader_workers > 0,
+        **loader_kwargs,
     )
     train_siamese(siam, siam_train, epochs=int(cfg["siamese_epochs"]))
     siam.fit_centroids(siam_train)
@@ -526,19 +548,15 @@ def main() -> None:
         test_ds_wa,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=loader_pin_memory,
-        persistent_workers=loader_workers > 0,
+        **loader_kwargs,
     )
     tl_fl = DataLoader(
         test_ds_fl,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=loader_pin_memory,
-        persistent_workers=loader_workers > 0,
+        **loader_kwargs,
     )
 
     A2_wa = _metrics_block(
@@ -580,19 +598,15 @@ def main() -> None:
         train_ds_a3,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=True,
-        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=loader_pin_memory,
-        persistent_workers=loader_workers > 0,
+        **loader_kwargs,
     )
     val_loader_a3 = DataLoader(
         val_ds_a3,
         batch_size=int(cfg["cnn_batch_size"]),
         shuffle=False,
-        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=loader_pin_memory,
-        persistent_workers=loader_workers > 0,
+        **loader_kwargs,
     )
     cnn_a3 = CNNClassifier(
         num_classes,
@@ -618,10 +632,8 @@ def main() -> None:
         train_ds_a3,
         batch_size=int(cfg["siamese_batch_size"]),
         shuffle=True,
-        num_workers=loader_workers,
         collate_fn=prnu_collate,
-        pin_memory=loader_pin_memory,
-        persistent_workers=loader_workers > 0,
+        **loader_kwargs,
     )
     train_siamese(siam_a3, siam_train_a3, epochs=int(cfg["siamese_epochs"]))
     siam_a3.fit_centroids(siam_train_a3)
