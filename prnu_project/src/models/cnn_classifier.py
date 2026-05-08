@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import time
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
@@ -62,7 +63,7 @@ class CNNClassifier:
     def __init__(
         self,
         num_classes: int,
-        device: str | torch.device = "cpu",
+        device: str | torch.device = "cuda",
         lr: float = 1e-4,
         weight_decay: float = 1e-4,
         use_amp: bool = False,
@@ -80,8 +81,16 @@ class CNNClassifier:
         weight_decay : float
             L2 penalty.
         """
-        self.device = torch.device(device)
+        req = str(device).strip().lower()
+        if req in {"", "auto"}:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        elif req.startswith("cuda") and not torch.cuda.is_available():
+            self.device = torch.device("cpu")
+        else:
+            self.device = torch.device(device)
+        print(f"Using device: {self.device}", flush=True)
         self.model = ResidualCNN(num_classes).to(self.device)
+        print(next(self.model.parameters()).device, flush=True)
         self.opt = torch.optim.Adam(
             self.model.parameters(), lr=lr, weight_decay=weight_decay
         )
@@ -117,11 +126,12 @@ class CNNClassifier:
             x = batch[0].to(self.device, non_blocking=True)
             y = batch[1].to(self.device, non_blocking=True)
             t_step = time.perf_counter()
-            with torch.autocast(
-                device_type=self.device.type,
-                dtype=torch.float16,
-                enabled=self.use_amp,
-            ):
+            amp_ctx = (
+                torch.cuda.amp.autocast()
+                if self.use_amp
+                else nullcontext()
+            )
+            with amp_ctx:
                 logits = self.model(x)
                 loss = self.loss_fn(logits, y)
                 loss_scaled = loss / self.grad_accum_steps

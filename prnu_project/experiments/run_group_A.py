@@ -68,6 +68,8 @@ def _resolve_device(requested: str) -> str:
         Concrete device string for torch modules.
     """
     req = str(requested).strip().lower()
+    if req in {"", "auto"}:
+        return "cuda" if torch.cuda.is_available() else "cpu"
     if req.startswith("cuda"):
         if torch.cuda.is_available():
             return requested
@@ -308,11 +310,11 @@ def main() -> None:
     parser.add_argument("--config", type=str, default="configs/default.yaml")
     parser.add_argument("--max-devices", type=int, default=None)
     parser.add_argument("--max-patches-per-image", type=int, default=None)
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="auto")
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=2,
+        default=4,
         help="DataLoader worker processes.",
     )
     parser.add_argument(

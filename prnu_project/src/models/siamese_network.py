@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 import time
+from contextlib import nullcontext
 
 import numpy as np
 import torch
@@ -192,7 +193,7 @@ class SiameseClassifier:
         self,
         num_classes: int,
         embedding_dim: int = 256,
-        device: str | torch.device = "cpu",
+        device: str | torch.device = "cuda",
         lr: float = 1e-4,
         margin: float = 1.0,
         mode: str = "triplet",
@@ -215,12 +216,20 @@ class SiameseClassifier:
         mode : str
             ``\"contrastive\"`` or ``\"triplet\"``.
         """
-        self.device = torch.device(device)
+        req = str(device).strip().lower()
+        if req in {"", "auto"}:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        elif req.startswith("cuda") and not torch.cuda.is_available():
+            self.device = torch.device("cpu")
+        else:
+            self.device = torch.device(device)
+        print(f"Using device: {self.device}", flush=True)
         self.num_classes = int(num_classes)
         self.embedding_dim = int(embedding_dim)
         self.margin = float(margin)
         self.mode = mode
         self.encoder = SiameseEncoder(embedding_dim).to(self.device)
+        print(next(self.encoder.parameters()).device, flush=True)
         self.opt = torch.optim.Adam(self.encoder.parameters(), lr=lr, weight_decay=1e-4)
         self.contrastive = ContrastiveLoss(margin=margin)
         self.triplet = TripletLoss(margin=min(0.5, margin))
@@ -257,11 +266,12 @@ class SiameseClassifier:
             x = batch[0].to(self.device, non_blocking=True)
             y = batch[1].to(self.device, non_blocking=True)
             t_step = time.perf_counter()
-            with torch.autocast(
-                device_type=self.device.type,
-                dtype=torch.float16,
-                enabled=self.use_amp,
-            ):
+            amp_ctx = (
+                torch.cuda.amp.autocast()
+                if self.use_amp
+                else nullcontext()
+            )
+            with amp_ctx:
                 z = self.encoder(x)
             loss_t: Optional[torch.Tensor] = None
             if self.mode == "triplet":
