@@ -78,6 +78,77 @@ def apply_train_sampling(
     return out
 
 
+def apply_device_image_subset(
+    splits: dict[str, list[tuple[str, str]]],
+    num_devices: int = 5,
+    images_per_device: int = 100,
+    seed: int = 42,
+) -> dict[str, list[tuple[str, str]]]:
+    """
+    Build a reproducible small subset across all splits for fast experiments.
+
+    Sampling policy:
+    - Select up to ``num_devices`` devices uniformly at random.
+    - For each selected device, sample up to ``images_per_device`` images total
+      from the union of train/val/test.
+    - Preserve each sampled image's original split assignment.
+
+    Parameters
+    ----------
+    splits : dict[str, list[tuple[str, str]]]
+        Split dict with keys like ``train``, ``val``, ``test``.
+    num_devices : int
+        Maximum number of devices to keep.
+    images_per_device : int
+        Maximum total images to keep per selected device.
+    seed : int
+        RNG seed for reproducible sampling.
+
+    Returns
+    -------
+    dict[str, list[tuple[str, str]]]
+        New split dictionary containing only the sampled subset.
+    """
+    if num_devices <= 0 or images_per_device <= 0:
+        raise ValueError("num_devices and images_per_device must be positive")
+    rng = random.Random(int(seed))
+    all_items = list(splits.get("train", [])) + list(splits.get("val", [])) + list(
+        splits.get("test", [])
+    )
+    if not all_items:
+        return {k: [] for k in splits.keys()}
+
+    devices = sorted({d for _, d in all_items})
+    if len(devices) > num_devices:
+        selected_devices = set(rng.sample(devices, k=num_devices))
+    else:
+        selected_devices = set(devices)
+
+    split_by_path: dict[str, str] = {}
+    for split_name, items in splits.items():
+        for p, _ in items:
+            split_by_path[p] = split_name
+
+    by_device: dict[str, list[tuple[str, str]]] = {}
+    for p, d in all_items:
+        if d in selected_devices:
+            by_device.setdefault(d, []).append((p, d))
+
+    out: dict[str, list[tuple[str, str]]] = {k: [] for k in splits.keys()}
+    for dev in sorted(selected_devices):
+        items = by_device.get(dev, [])
+        if not items:
+            continue
+        if len(items) > images_per_device:
+            picked = rng.sample(items, k=images_per_device)
+        else:
+            picked = list(items)
+        for p, d in picked:
+            split_name = split_by_path.get(p, "train")
+            out.setdefault(split_name, []).append((p, d))
+    return out
+
+
 def _list_images(root: Path) -> list[Path]:
     """
     Recursively list image files under ``root``.

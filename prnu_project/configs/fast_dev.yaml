@@ -1,0 +1,45 @@
+seed: 42
+
+# Set this to your Colab-mounted Dresden root.
+dresden_root: /content/drive/MyDrive/dresden_data/raw/dresden/Dresden_Exp
+ieee_sp_root: data/raw/ieee_sp
+fingerprint_dir: data/processed/fingerprints
+patch_cache_hint: data/processed/patches
+residual_cache_dir: data/processed/residuals_fast
+
+# Fast subset controls
+num_devices: 5
+images_per_device: 100
+
+# Split ratios
+min_images_per_device: 1
+train_ratio: 0.60
+val_ratio: 0.20
+test_ratio: 0.20
+
+# PRNU + patches
+wiener_window: 3
+patch_size: 64
+max_patches_per_image: 10
+fingerprint_epsilon: 1e-6
+fingerprint_resize_max_dim: 1024
+fingerprint_max_images_per_device: 20
+
+# Training speed
+batch_size: 32
+epochs: 5
+cnn_batch_size: 32
+cnn_epochs: 5
+siamese_batch_size: 32
+siamese_epochs: 5
+cnn_lr: 1e-4
+cnn_weight_decay: 1e-4
+siamese_lr: 1e-4
+siamese_margin: 1.0
+siamese_embedding_dim: 128
+use_amp: true
+grad_accum_steps: 1
+
+# DataLoader
+num_workers: 4
+pin_memory: true
