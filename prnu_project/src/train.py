@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import random
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -100,12 +101,23 @@ def train_cnn(
     """
     history: dict[str, Any] = {"train_loss": [], "val_acc": []}
     for ep in range(epochs):
+        t0 = time.perf_counter()
         loss = clf.train_epoch(train_loader)
         history["train_loss"].append(loss)
         if val_loader is not None:
             ev = clf.evaluate(val_loader)
             history["val_acc"].append(ev["accuracy"])
-        tqdm.write(f"[CNN] epoch {ep+1}/{epochs} train_loss={loss:.4f}")
+        dt = time.perf_counter() - t0
+        timing = getattr(clf, "last_timing", {})
+        gpu_mem = 0.0
+        if getattr(clf, "device", torch.device("cpu")).type == "cuda":
+            gpu_mem = torch.cuda.max_memory_allocated(clf.device) / (1024**3)
+            torch.cuda.reset_peak_memory_stats(clf.device)
+        tqdm.write(
+            f"[CNN] epoch {ep+1}/{epochs} train_loss={loss:.4f} "
+            f"epoch_s={dt:.2f} data_s={timing.get('data_time_s', 0.0):.4f} "
+            f"step_s={timing.get('step_time_s', 0.0):.4f} gpu_mem_gb={gpu_mem:.2f}"
+        )
     return history
 
 
@@ -133,7 +145,18 @@ def train_siamese(
     """
     history: dict[str, Any] = {"train_loss": []}
     for ep in range(epochs):
+        t0 = time.perf_counter()
         loss = clf.train_epoch(train_loader)
         history["train_loss"].append(loss)
-        tqdm.write(f"[Siamese] epoch {ep+1}/{epochs} train_loss={loss:.4f}")
+        dt = time.perf_counter() - t0
+        timing = getattr(clf, "last_timing", {})
+        gpu_mem = 0.0
+        if getattr(clf, "device", torch.device("cpu")).type == "cuda":
+            gpu_mem = torch.cuda.max_memory_allocated(clf.device) / (1024**3)
+            torch.cuda.reset_peak_memory_stats(clf.device)
+        tqdm.write(
+            f"[Siamese] epoch {ep+1}/{epochs} train_loss={loss:.4f} "
+            f"epoch_s={dt:.2f} data_s={timing.get('data_time_s', 0.0):.4f} "
+            f"step_s={timing.get('step_time_s', 0.0):.4f} gpu_mem_gb={gpu_mem:.2f}"
+        )
     return history

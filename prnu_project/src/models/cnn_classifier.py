@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import time
 
 import torch
 import torch.nn as nn
@@ -64,6 +65,8 @@ class CNNClassifier:
         device: str | torch.device = "cpu",
         lr: float = 1e-4,
         weight_decay: float = 1e-4,
+        use_amp: bool = False,
+        grad_accum_steps: int = 1,
     ) -> None:
         """
         Parameters
@@ -83,6 +86,10 @@ class CNNClassifier:
             self.model.parameters(), lr=lr, weight_decay=weight_decay
         )
         self.loss_fn = nn.CrossEntropyLoss()
+        self.use_amp = bool(use_amp) and self.device.type == "cuda"
+        self.grad_accum_steps = max(1, int(grad_accum_steps))
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+        self.last_timing: dict[str, float] = {"data_time_s": 0.0, "step_time_s": 0.0}
 
     def train_epoch(self, loader: DataLoader) -> float:
         """
@@ -100,16 +107,42 @@ class CNNClassifier:
         """
         self.model.train()
         total, n = 0.0, 0
-        for batch in loader:
+        data_time, step_time = 0.0, 0.0
+        t_prev = time.perf_counter()
+        self.opt.zero_grad(set_to_none=True)
+        bi = 0
+        for bi, batch in enumerate(loader, start=1):
+            t_now = time.perf_counter()
+            data_time += t_now - t_prev
             x = batch[0].to(self.device, non_blocking=True)
             y = batch[1].to(self.device, non_blocking=True)
-            self.opt.zero_grad(set_to_none=True)
-            logits = self.model(x)
-            loss = self.loss_fn(logits, y)
-            loss.backward()
-            self.opt.step()
+            t_step = time.perf_counter()
+            with torch.autocast(
+                device_type=self.device.type,
+                dtype=torch.float16,
+                enabled=self.use_amp,
+            ):
+                logits = self.model(x)
+                loss = self.loss_fn(logits, y)
+                loss_scaled = loss / self.grad_accum_steps
+            self.scaler.scale(loss_scaled).backward()
+            if bi % self.grad_accum_steps == 0:
+                self.scaler.step(self.opt)
+                self.scaler.update()
+                self.opt.zero_grad(set_to_none=True)
             total += float(loss.item()) * x.size(0)
             n += x.size(0)
+            step_time += time.perf_counter() - t_step
+            t_prev = time.perf_counter()
+        if n > 0 and bi > 0 and (bi % self.grad_accum_steps) != 0:
+            self.scaler.step(self.opt)
+            self.scaler.update()
+            self.opt.zero_grad(set_to_none=True)
+        denom = max(1, len(loader))
+        self.last_timing = {
+            "data_time_s": data_time / denom,
+            "step_time_s": step_time / denom,
+        }
         return total / max(1, n)
 
     @torch.no_grad()

@@ -332,6 +332,12 @@ def main() -> None:
         default=None,
         help="Override sample_fraction from config (e.g. 0.10-0.30).",
     )
+    parser.add_argument(
+        "--residual-root",
+        type=str,
+        default=None,
+        help="Optional precomputed residual root; if set, datasets load cached residuals.",
+    )
     args = parser.parse_args()
     run_device = _resolve_device(args.device)
     use_cuda = str(run_device).startswith("cuda")
@@ -368,7 +374,10 @@ def main() -> None:
     mapping = build_device_label_map(
         splits["train"] + splits["val"] + splits["test"]
     )
-    splits, mapping = _filter_devices(splits, mapping, args.max_devices)
+    max_devices = args.max_devices
+    if max_devices is None:
+        max_devices = cfg.get("max_devices_subset")
+    splits, mapping = _filter_devices(splits, mapping, max_devices)
 
     if args.no_sampling:
         cfg["use_sampling"] = False
@@ -411,23 +420,27 @@ def main() -> None:
     ncc.fit(paths["fingerprint_dir"])
 
     ps = int(cfg["patch_size"])
+    residual_root = args.residual_root or cfg.get("residual_cache_dir")
     train_ds = PRNUPatchDataset(
         attach_labels(splits["train"], mapping),
         patch_size=ps,
         denoiser=denoiser,
         max_patches_per_image=args.max_patches_per_image,
+        residual_root=residual_root,
     )
     val_ds = PRNUPatchDataset(
         attach_labels(splits["val"], mapping),
         patch_size=ps,
         denoiser=denoiser,
         max_patches_per_image=args.max_patches_per_image,
+        residual_root=residual_root,
     )
     test_ds = PRNUPatchDataset(
         attach_labels(splits["test"], mapping),
         patch_size=ps,
         denoiser=denoiser,
         max_patches_per_image=args.max_patches_per_image,
+        residual_root=residual_root,
     )
 
     if len(train_ds) == 0:
@@ -487,6 +500,8 @@ def main() -> None:
         device=run_device,
         lr=float(cfg["cnn_lr"]),
         weight_decay=float(cfg["cnn_weight_decay"]),
+        use_amp=bool(cfg.get("use_amp", True)),
+        grad_accum_steps=int(cfg.get("grad_accum_steps", 1)),
     )
     train_cnn(
         cnn,
@@ -502,6 +517,8 @@ def main() -> None:
         lr=float(cfg["siamese_lr"]),
         margin=float(cfg["siamese_margin"]),
         mode="triplet",
+        use_amp=bool(cfg.get("use_amp", True)),
+        grad_accum_steps=int(cfg.get("grad_accum_steps", 1)),
     )
     siam_train = DataLoader(
         train_ds,
@@ -593,6 +610,7 @@ def main() -> None:
         patch_size=ps,
         denoiser=denoiser,
         max_patches_per_image=args.max_patches_per_image,
+        residual_root=residual_root,
     )
     train_loader_a3 = DataLoader(
         train_ds_a3,
@@ -613,6 +631,8 @@ def main() -> None:
         device=run_device,
         lr=float(cfg["cnn_lr"]),
         weight_decay=float(cfg["cnn_weight_decay"]),
+        use_amp=bool(cfg.get("use_amp", True)),
+        grad_accum_steps=int(cfg.get("grad_accum_steps", 1)),
     )
     train_cnn(
         cnn_a3,
@@ -627,6 +647,8 @@ def main() -> None:
         lr=float(cfg["siamese_lr"]),
         margin=float(cfg["siamese_margin"]),
         mode="triplet",
+        use_amp=bool(cfg.get("use_amp", True)),
+        grad_accum_steps=int(cfg.get("grad_accum_steps", 1)),
     )
     siam_train_a3 = DataLoader(
         train_ds_a3,

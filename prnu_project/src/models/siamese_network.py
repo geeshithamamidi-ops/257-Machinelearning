@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+import time
 
 import numpy as np
 import torch
@@ -195,6 +196,8 @@ class SiameseClassifier:
         lr: float = 1e-4,
         margin: float = 1.0,
         mode: str = "triplet",
+        use_amp: bool = False,
+        grad_accum_steps: int = 1,
     ) -> None:
         """
         Parameters
@@ -221,6 +224,10 @@ class SiameseClassifier:
         self.opt = torch.optim.Adam(self.encoder.parameters(), lr=lr, weight_decay=1e-4)
         self.contrastive = ContrastiveLoss(margin=margin)
         self.triplet = TripletLoss(margin=min(0.5, margin))
+        self.use_amp = bool(use_amp) and self.device.type == "cuda"
+        self.grad_accum_steps = max(1, int(grad_accum_steps))
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+        self.last_timing: dict[str, float] = {"data_time_s": 0.0, "step_time_s": 0.0}
         self._centroids: dict[int, torch.Tensor] = {}
         self._label_list: list[int] = []
 
@@ -240,10 +247,22 @@ class SiameseClassifier:
         """
         self.encoder.train()
         total, n = 0.0, 0
-        for batch in loader:
+        data_time, step_time = 0.0, 0.0
+        t_prev = time.perf_counter()
+        self.opt.zero_grad(set_to_none=True)
+        bi = 0
+        for bi, batch in enumerate(loader, start=1):
+            t_now = time.perf_counter()
+            data_time += t_now - t_prev
             x = batch[0].to(self.device, non_blocking=True)
             y = batch[1].to(self.device, non_blocking=True)
-            z = self.encoder(x)
+            t_step = time.perf_counter()
+            with torch.autocast(
+                device_type=self.device.type,
+                dtype=torch.float16,
+                enabled=self.use_amp,
+            ):
+                z = self.encoder(x)
             loss_t: Optional[torch.Tensor] = None
             if self.mode == "triplet":
                 trip = _semi_hard_triplets(z, y, self.margin)
@@ -257,11 +276,25 @@ class SiameseClassifier:
                 y2 = y[perm]
                 same = (y == y2).float()
                 loss_t = self.contrastive(z, z2, same)
-            self.opt.zero_grad(set_to_none=True)
-            loss_t.backward()
-            self.opt.step()
+            loss_scaled = loss_t / self.grad_accum_steps
+            self.scaler.scale(loss_scaled).backward()
+            if bi % self.grad_accum_steps == 0:
+                self.scaler.step(self.opt)
+                self.scaler.update()
+                self.opt.zero_grad(set_to_none=True)
             total += float(loss_t.item()) * x.size(0)
             n += x.size(0)
+            step_time += time.perf_counter() - t_step
+            t_prev = time.perf_counter()
+        if n > 0 and bi > 0 and (bi % self.grad_accum_steps) != 0:
+            self.scaler.step(self.opt)
+            self.scaler.update()
+            self.opt.zero_grad(set_to_none=True)
+        denom = max(1, len(loader))
+        self.last_timing = {
+            "data_time_s": data_time / denom,
+            "step_time_s": step_time / denom,
+        }
         return total / max(1, n)
 
     @torch.no_grad()

@@ -1,0 +1,48 @@
+seed: 42
+
+# Set this to your mounted/attached dataset path in Colab/Kaggle.
+dresden_root: /kaggle/input/datasets/micscodes/dresden-image-database/Dresden_Exp
+ieee_sp_root: data/raw/ieee_sp
+fingerprint_dir: data/processed/fingerprints
+patch_cache_hint: data/processed/patches
+residual_cache_dir: data/processed/residuals
+
+patch_size: 64
+min_images_per_device: 50
+train_ratio: 0.60
+val_ratio: 0.20
+test_ratio: 0.20
+max_devices_subset: 10
+
+wiener_window: 3
+wiener_backend: scipy
+fingerprint_epsilon: 1e-6
+fingerprint_resize_max_dim: 1024
+fingerprint_max_images_per_device: 6
+
+cnn_lr: 1e-4
+cnn_weight_decay: 1e-4
+cnn_epochs: 10
+cnn_batch_size: 128
+
+siamese_lr: 1e-4
+siamese_margin: 1.0
+siamese_epochs: 10
+siamese_batch_size: 64
+siamese_embedding_dim: 128
+
+use_amp: true
+grad_accum_steps: 1
+
+jpeg_quality_levels: [95, 85, 70]
+resize_scale_factors: [0.9, 0.7]
+whatsapp_quality: 77
+whatsapp_max_dim: 1600
+flickr_quality: 92
+flickr_max_dim: 2048
+
+ece_bins: 15
+
+use_sampling: true
+sample_fraction: 0.20
+sample_min_per_class: 20

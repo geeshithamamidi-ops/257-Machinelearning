@@ -121,6 +121,28 @@ def count_images_under(root: str | Path) -> int:
     return len(_list_images(p))
 
 
+def residual_cache_path(residual_root: str | Path, image_path: str) -> Path:
+    """
+    Deterministically map an image path to a cached residual file path.
+
+    Parameters
+    ----------
+    residual_root : str | Path
+        Root directory for precomputed residuals.
+    image_path : str
+        Absolute or relative source image path.
+
+    Returns
+    -------
+    Path
+        Path under ``residual_root/<device>/<hash>.npy``.
+    """
+    p = Path(image_path)
+    device = (p.parent.name or "unknown").replace(os.sep, "_")
+    h = hashlib.md5(str(p.resolve()).encode("utf-8")).hexdigest()
+    return Path(residual_root) / device / f"{h}.npy"
+
+
 def _parse_dresden_sample(
     root: Path, path: Path
 ) -> tuple[str, str, str]:
@@ -385,7 +407,7 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
     def __init__(
         self,
         samples: list[tuple[str, int]],
-        patch_size: int = 128,
+        patch_size: int = 64,
         transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         denoiser: Optional[WienerDenoiser] = None,
         max_patches_per_image: Optional[int] = None,
@@ -393,6 +415,7 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
             Callable[[str], Callable[[np.ndarray], np.ndarray]]
         ] = None,
         cache_dir: Optional[str | Path] = None,
+        residual_root: Optional[str | Path] = None,
     ) -> None:
         """
         Parameters
@@ -425,6 +448,9 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
             except ValueError:
                 pass
         self.max_patches_per_image = max_patches_per_image
+        self.residual_root: Optional[Path] = (
+            Path(residual_root) if residual_root else None
+        )
         env_cache = os.environ.get("PRNU_PATCH_CACHE_DIR", "").strip() or None
         self.cache_dir: Optional[Path] = (
             Path(cache_dir) if cache_dir else (Path(env_cache) if env_cache else None)
@@ -437,6 +463,7 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
         self._patch_hw: list[tuple[int, int]] = []
         self._npatches: list[int] = []
         self._offsets: list[int] = []
+        self._residual_paths: list[Optional[Path]] = []
         self._build_index()
 
     def _build_index(self) -> None:
@@ -452,13 +479,24 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
         skipped = 0
         fast_path = self.transform is None and self.per_path_transform_factory is None
         for path, lab in self.samples:
+            residual_path: Optional[Path] = None
+            if self.residual_root is not None:
+                residual_path = residual_cache_path(self.residual_root, path)
             if fast_path:
-                try:
-                    with _PILImage.open(path) as _im:
-                        w, h = _im.size
-                except Exception:
-                    skipped += 1
-                    continue
+                if residual_path is not None and residual_path.is_file():
+                    try:
+                        arr = np.load(residual_path, mmap_mode="r")
+                        h, w = int(arr.shape[0]), int(arr.shape[1])
+                    except Exception:
+                        skipped += 1
+                        continue
+                else:
+                    try:
+                        with _PILImage.open(path) as _im:
+                            w, h = _im.size
+                    except Exception:
+                        skipped += 1
+                        continue
             else:
                 try:
                     rgb = load_image_rgb_float(path)
@@ -490,6 +528,7 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
             self._labels.append(int(lab))
             self._patch_hw.append((nh, nw))
             self._npatches.append(n_grid)
+            self._residual_paths.append(residual_path if residual_path and residual_path.is_file() else None)
             self._offsets.append(self._offsets[-1] + n_grid)
 
     def __len__(self) -> int:
@@ -538,17 +577,28 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
         return self.cache_dir / f"{key}.npy"
 
     def _compute_all_patches(
-        self, path: str, nh: int, nw: int, n_keep: int
+        self, path: str, nh: int, nw: int, n_keep: int, residual_path: Optional[Path]
     ) -> np.ndarray:
         """Denoise full image once and extract the first ``n_keep`` grayscale patches."""
-        rgb = load_image_rgb_float(path)
-        u8 = np.clip(rgb, 0, 255).astype(np.uint8)
-        if self.per_path_transform_factory is not None:
-            u8 = self.per_path_transform_factory(path)(u8)
-        elif self.transform is not None:
-            u8 = self.transform(u8)
-        rgb = u8.astype(np.float32)
-        res = self.denoiser.residual(rgb)
+        can_use_precomputed = (
+            residual_path is not None
+            and residual_path.is_file()
+            and self.transform is None
+            and self.per_path_transform_factory is None
+        )
+        if can_use_precomputed:
+            res = np.load(residual_path)
+            if res.ndim == 2:
+                res = res[..., None]
+        else:
+            rgb = load_image_rgb_float(path)
+            u8 = np.clip(rgb, 0, 255).astype(np.uint8)
+            if self.per_path_transform_factory is not None:
+                u8 = self.per_path_transform_factory(path)(u8)
+            elif self.transform is not None:
+                u8 = self.transform(u8)
+            rgb = u8.astype(np.float32)
+            res = self.denoiser.residual(rgb)
         ps = self.patch_size
         patches = np.empty((n_keep, ps, ps), dtype=np.float32)
         for k in range(n_keep):
@@ -575,6 +625,7 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
         ii, pi = self._decode_index(index)
         path = self._image_paths[ii]
         lab = self._labels[ii]
+        residual_path = self._residual_paths[ii]
         nh, nw = self._patch_hw[ii]
         total_grid = self._npatches[ii]
         if pi >= total_grid:
@@ -593,7 +644,7 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
             except Exception:
                 pass
 
-        patches = self._compute_all_patches(path, nh, nw, total_grid)
+        patches = self._compute_all_patches(path, nh, nw, total_grid, residual_path)
         if cache_file is not None:
             try:
                 tmp_path = cache_file.parent / (cache_file.stem + f".tmp{os.getpid()}.npy")

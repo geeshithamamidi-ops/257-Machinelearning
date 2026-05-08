@@ -67,6 +67,38 @@ python experiments/run_group_D.py --config configs/default.yaml
 
 Optional flags (all groups): `--max-devices N` to cap the number of devices for faster debugging, `--device cuda` when a GPU is available. Group C additionally supports `--skip-ieee` if IEEE SP data is not unpacked yet, and `--cnn-epochs` / `--siamese-epochs` overrides.
 
+### Fast GPU workflow (Colab/Kaggle)
+
+1. **Precompute residual cache once** (resume-safe):
+
+```bash
+python scripts/precompute_prnu.py \
+  --config configs/colab_gpu_fast.yaml \
+  --split train \
+  --out-dir data/processed/residuals
+```
+
+2. **Train Group A with cached residuals + AMP**:
+
+```bash
+python experiments/run_group_A.py \
+  --config configs/colab_gpu_fast.yaml \
+  --device cuda \
+  --num-workers 4 \
+  --prefetch-factor 2 \
+  --residual-root data/processed/residuals
+```
+
+3. **Notebook-friendly launcher** (auto-detects GPU):
+
+```bash
+python scripts/run_notebook_training.py \
+  --config configs/colab_gpu_fast.yaml \
+  --sample-fraction 0.20 \
+  --max-devices 10 \
+  --residual-root data/processed/residuals
+```
+
 ## 5. Results schema
 
 - **`results/group_A.json`**: `A1` clean test; `A2` train clean / test WhatsApp+Flickr (metrics averaged across the two simulators); `A3` train with JPEG augmentation / test social simulators. Each block reports `top1`, `top5`, `macro_f1` for `NCC`, `CNN`, and `Siamese`.
