@@ -11,7 +11,6 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.signal import wiener
 
 from src.preprocessing import load_image_rgb_float
 
@@ -45,7 +44,7 @@ def _resize_long_edge(rgb: np.ndarray, max_dim: int) -> np.ndarray:
 
 class WienerDenoiser:
     """
-    Wiener filter denoising in the spatial domain (scipy.signal.wiener).
+    Wiener-like denoising with local moments in PyTorch.
 
     Residual: W = I - F(I), where F is Wiener filtering on luminance.
     """
@@ -60,36 +59,37 @@ class WienerDenoiser:
         Parameters
         ----------
         window_size : int
-            Odd-ish local window for ``scipy.signal.wiener`` (mysize).
+            Odd local window for local-mean/variance denoising.
         """
         self.window_size = int(window_size)
         self.backend = str(backend).strip().lower()
         self.torch_device = torch.device(torch_device)
 
-    def _wiener_torch_channel(self, ch: np.ndarray) -> np.ndarray:
+    def _wiener_torch_image(self, img: np.ndarray) -> np.ndarray:
         """
         Approximate Wiener filtering with local moments in PyTorch.
 
         Parameters
         ----------
-        ch : np.ndarray
-            Single-channel image in float64.
+        img : np.ndarray
+            RGB image in float64, shape HxWx3.
 
         Returns
         -------
         np.ndarray
-            Filtered channel in float64.
+            Filtered image in float64.
         """
-        t = torch.from_numpy(ch).to(self.torch_device, dtype=torch.float32)[None, None, ...]
+        t = torch.from_numpy(img).to(self.torch_device, dtype=torch.float32)
+        t = t.permute(2, 0, 1).unsqueeze(0).contiguous()
         k = int(self.window_size)
         pad = k // 2
         local_mean = F.avg_pool2d(t, kernel_size=k, stride=1, padding=pad)
         local_sq_mean = F.avg_pool2d(t * t, kernel_size=k, stride=1, padding=pad)
         local_var = torch.clamp(local_sq_mean - local_mean * local_mean, min=0.0)
-        noise = local_var.mean()
+        noise = local_var.mean(dim=(2, 3), keepdim=True)
         gain = torch.clamp(local_var - noise, min=0.0) / (local_var + 1e-8)
         filt = local_mean + gain * (t - local_mean)
-        return filt[0, 0].detach().cpu().numpy().astype(np.float64)
+        return filt[0].permute(1, 2, 0).detach().cpu().numpy().astype(np.float64)
 
     def denoise(self, img: np.ndarray) -> np.ndarray:
         """
@@ -108,16 +108,9 @@ class WienerDenoiser:
         x = img.astype(np.float64)
         if x.max() <= 1.0:
             x = x * 255.0
-        out = np.zeros_like(x, dtype=np.float64)
-        ws = (self.window_size, self.window_size)
-        for c in range(3):
-            ch = x[..., c] + 1e-4
-            if self.backend == "torch":
-                filt = self._wiener_torch_channel(ch)
-            else:
-                # Tiny offset avoids scipy wiener divide-by-zero on flat regions (uniform patches).
-                filt = wiener(ch, mysize=ws)
-            out[..., c] = np.nan_to_num(filt, nan=ch, posinf=ch, neginf=ch)
+        x = x + 1e-4
+        out = self._wiener_torch_image(x)
+        out = np.nan_to_num(out, nan=x, posinf=x, neginf=x)
         return out.astype(np.float32)
 
     def residual(self, img: np.ndarray) -> np.ndarray:

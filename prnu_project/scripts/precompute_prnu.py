@@ -8,15 +8,11 @@ Example:
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-from tqdm import tqdm
-
-from src.data_loader import DresdenLoader, residual_cache_path
-from src.prnu_extraction import WienerDenoiser
+from src.data_loader import DresdenLoader
+from src.gpu_prnu_extractor import GPUResidualExtractor
 from src.train import load_config
 
 
@@ -59,6 +55,14 @@ def main() -> None:
     parser.add_argument("--max-devices", type=int, default=None)
     parser.add_argument("--max-images-per-device", type=int, default=None)
     parser.add_argument("--force", action="store_true", help="Recompute even if cached exists.")
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--save-format", choices=["pt", "npy"], default="pt")
+    parser.add_argument(
+        "--no-legacy-npy",
+        action="store_true",
+        help="If set, do not write compatibility .npy files when saving .pt.",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[1]
@@ -68,45 +72,39 @@ def main() -> None:
         out_dir = project_root / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    denoiser = WienerDenoiser(
-        window_size=int(cfg.get("wiener_window", 3)),
-        backend=str(cfg.get("wiener_backend", "scipy")),
-        torch_device=str(cfg.get("wiener_torch_device", "cpu")),
-    )
-
     samples = _iter_target_samples(cfg, args.split, args.max_devices)
-    by_device: dict[str, list[str]] = defaultdict(list)
-    for p, d in samples:
-        by_device[d].append(p)
-    for d in by_device:
-        by_device[d] = sorted(by_device[d])
-        if args.max_images_per_device is not None and args.max_images_per_device > 0:
-            by_device[d] = by_device[d][: args.max_images_per_device]
-
-    total = sum(len(v) for v in by_device.values())
-    done, skipped = 0, 0
-    pbar = tqdm(total=total, desc=f"PRNU residuals ({args.split})")
-    for dev in sorted(by_device):
-        for img_path in by_device[dev]:
-            out_path = residual_cache_path(out_dir, img_path)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            if out_path.exists() and not args.force:
-                skipped += 1
-                pbar.update(1)
+    samples = sorted(samples, key=lambda t: (t[1], t[0]))
+    if args.max_images_per_device is not None and args.max_images_per_device > 0:
+        per_dev: dict[str, int] = {}
+        limited: list[tuple[str, str]] = []
+        for p, d in samples:
+            cnt = per_dev.get(d, 0)
+            if cnt >= args.max_images_per_device:
                 continue
-            try:
-                from src.preprocessing import load_image_rgb_float
+            limited.append((p, d))
+            per_dev[d] = cnt + 1
+        samples = limited
+    image_paths = [p for p, _ in samples]
+    device_ids = [d for _, d in samples]
 
-                rgb = load_image_rgb_float(img_path)
-                res = denoiser.residual(rgb)
-                np.save(out_path, res.astype(np.float16))
-                done += 1
-            except Exception:
-                skipped += 1
-            pbar.update(1)
-    pbar.close()
+    extractor = GPUResidualExtractor(
+        window_size=int(cfg.get("wiener_window", 3)),
+        batch_size=int(args.batch_size),
+        num_workers=int(args.num_workers),
+        pin_memory=bool(cfg.get("pin_memory", True)),
+        use_amp=bool(cfg.get("use_amp", True)),
+        save_format=args.save_format,
+        write_legacy_npy=not bool(args.no_legacy_npy),
+    )
+    stats = extractor.run(
+        image_paths=image_paths,
+        device_ids=device_ids,
+        out_dir=out_dir,
+        force=bool(args.force),
+    )
     print(
-        f"Residual precompute complete. written={done} skipped={skipped} "
+        f"Residual precompute complete. written={stats['written']} "
+        f"failed={stats['failed']} skipped={stats['skipped_cache']} "
         f"out_dir={out_dir}",
         flush=True,
     )

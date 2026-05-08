@@ -143,6 +143,28 @@ def residual_cache_path(residual_root: str | Path, image_path: str) -> Path:
     return Path(residual_root) / device / f"{h}.npy"
 
 
+def residual_cache_pt_path(residual_root: str | Path, image_path: str) -> Path:
+    """
+    Deterministically map an image path to a cached residual tensor (.pt).
+
+    Parameters
+    ----------
+    residual_root : str | Path
+        Root directory for precomputed residuals.
+    image_path : str
+        Absolute or relative source image path.
+
+    Returns
+    -------
+    Path
+        Path under ``residual_root/<device>/<hash>.pt``.
+    """
+    p = Path(image_path)
+    device = (p.parent.name or "unknown").replace(os.sep, "_")
+    h = hashlib.md5(str(p.resolve()).encode("utf-8")).hexdigest()
+    return Path(residual_root) / device / f"{h}.pt"
+
+
 def _parse_dresden_sample(
     root: Path, path: Path
 ) -> tuple[str, str, str]:
@@ -481,7 +503,9 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
         for path, lab in self.samples:
             residual_path: Optional[Path] = None
             if self.residual_root is not None:
-                residual_path = residual_cache_path(self.residual_root, path)
+                pt_path = residual_cache_pt_path(self.residual_root, path)
+                npy_path = residual_cache_path(self.residual_root, path)
+                residual_path = pt_path if pt_path.is_file() else npy_path
             if fast_path:
                 if residual_path is not None and residual_path.is_file():
                     try:
@@ -587,7 +611,14 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
             and self.per_path_transform_factory is None
         )
         if can_use_precomputed:
-            res = np.load(residual_path)
+            if residual_path.suffix == ".pt":
+                ten = torch.load(residual_path, map_location="cpu")
+                if isinstance(ten, torch.Tensor):
+                    res = ten.numpy()
+                else:
+                    raise ValueError(f"Unexpected .pt residual payload type: {type(ten)}")
+            else:
+                res = np.load(residual_path)
             if res.ndim == 2:
                 res = res[..., None]
         else:
