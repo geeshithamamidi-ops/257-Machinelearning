@@ -153,10 +153,20 @@ def main() -> None:
         print("[fast-dev] skip_precompute=True -> using on-the-fly residual extraction", flush=True)
         residual_arg = None
 
+    # In skip_precompute mode, residual extraction happens inside Dataset workers.
+    # CUDA in forked workers is unstable in Colab, so keep denoising on CPU there.
+    denoiser_torch_device = run_device
+    if args.skip_precompute and int(cfg.get("num_workers", 4)) > 0:
+        denoiser_torch_device = "cpu"
+        print(
+            "[fast-dev] skip_precompute with num_workers>0 -> using CPU denoiser in workers "
+            "to avoid CUDA multiprocessing errors.",
+            flush=True,
+        )
     denoiser = WienerDenoiser(
         window_size=int(cfg.get("wiener_window", 3)),
         backend="torch",
-        torch_device=run_device,
+        torch_device=denoiser_torch_device,
     )
     patch_size = int(cfg.get("patch_size", 64))
     max_patches_per_image = int(cfg.get("max_patches_per_image", 10))
@@ -195,6 +205,7 @@ def main() -> None:
     if int(loader_kwargs["num_workers"]) > 0:
         loader_kwargs["persistent_workers"] = True
         loader_kwargs["prefetch_factor"] = 2
+        loader_kwargs["multiprocessing_context"] = "spawn"
     batch_size = int(cfg.get("batch_size", 32))
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
