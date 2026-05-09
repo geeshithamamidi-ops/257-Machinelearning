@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -107,6 +108,10 @@ def _maybe_precompute_subset(
         device_ids=dev_ids,
         out_dir=residual_root,
         force=False,
+        target_size=(
+            int(cfg.get("image_size", 128)),
+            int(cfg.get("image_size", 128)),
+        ),
     )
     dt = time.perf_counter() - t0
     print(
@@ -127,6 +132,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    wall_start = datetime.now()
+    global_start = time.perf_counter()
     project_root = Path(__file__).resolve().parents[1]
     cfg = load_config(_resolve_path(project_root, args.config))
     cfg["dresden_root"] = str(_resolve_path(project_root, str(cfg["dresden_root"])))
@@ -141,12 +148,30 @@ def main() -> None:
     if run_device == "cuda":
         print(f"[fast-dev] gpu={torch.cuda.get_device_name(0)}", flush=True)
 
+    # fast_dev_mode consolidates all speed-focused knobs in one switch while
+    # preserving backwards-compatible defaults when disabled.
+    if bool(cfg.get("fast_dev_mode", False)):
+        cfg["num_devices"] = min(int(cfg.get("num_devices", 5)), int(cfg.get("fast_num_devices", 5)))
+        cfg["images_per_device"] = min(
+            int(cfg.get("images_per_device", 200)),
+            int(cfg.get("fast_images_per_device", 200)),
+        )
+        cfg["epochs"] = int(cfg.get("fast_epochs", 1))
+        cfg["cnn_epochs"] = int(cfg.get("fast_epochs", 1))
+        cfg["siamese_epochs"] = int(cfg.get("fast_epochs", 1))
+        cfg["skip_expensive_preprocessing"] = bool(cfg.get("skip_expensive_preprocessing", True))
+        print(
+            "[fast-dev] fast_dev_mode enabled: reduced subset + 1 epoch + optional preprocessing skips",
+            flush=True,
+        )
+
     splits, mapping = _build_subset_splits(cfg)
     if not splits["train"] or not mapping:
         raise RuntimeError("No samples selected. Check dresden_root/num_devices/images_per_device.")
     _log_subset_stats(splits, cfg)
 
-    if not args.skip_precompute:
+    skip_precompute = bool(args.skip_precompute or cfg.get("skip_expensive_preprocessing", False))
+    if not skip_precompute:
         _maybe_precompute_subset(cfg, splits, residual_root)
         residual_arg: str | None = str(residual_root)
     else:
@@ -156,7 +181,7 @@ def main() -> None:
     # In skip_precompute mode, residual extraction happens inside Dataset workers.
     # CUDA in forked workers is unstable in Colab, so keep denoising on CPU there.
     denoiser_torch_device = run_device
-    if args.skip_precompute and int(cfg.get("num_workers", 4)) > 0:
+    if skip_precompute and int(cfg.get("num_workers", 8)) > 0:
         denoiser_torch_device = "cpu"
         print(
             "[fast-dev] skip_precompute with num_workers>0 -> using CPU denoiser in workers "
@@ -168,11 +193,15 @@ def main() -> None:
         backend="torch",
         torch_device=denoiser_torch_device,
     )
+    # Resize to 128x128 in fast mode reduces residual extraction + patch indexing cost.
+    image_resize = int(cfg.get("image_size", 128))
+    resize_hw = (image_resize, image_resize)
     patch_size = int(cfg.get("patch_size", 64))
     max_patches_per_image = int(cfg.get("max_patches_per_image", 10))
     train_ds = PRNUPatchDataset(
         attach_labels(splits["train"], mapping),
         patch_size=patch_size,
+        resize_hw=resize_hw,
         denoiser=denoiser,
         max_patches_per_image=max_patches_per_image,
         residual_root=residual_arg,
@@ -180,6 +209,7 @@ def main() -> None:
     val_ds = PRNUPatchDataset(
         attach_labels(splits["val"], mapping),
         patch_size=patch_size,
+        resize_hw=resize_hw,
         denoiser=denoiser,
         max_patches_per_image=max_patches_per_image,
         residual_root=residual_arg,
@@ -187,6 +217,7 @@ def main() -> None:
     test_ds = PRNUPatchDataset(
         attach_labels(splits["test"], mapping),
         patch_size=patch_size,
+        resize_hw=resize_hw,
         denoiser=denoiser,
         max_patches_per_image=max_patches_per_image,
         residual_root=residual_arg,
@@ -198,18 +229,25 @@ def main() -> None:
     )
 
     loader_kwargs: dict[str, Any] = {
-        "num_workers": int(cfg.get("num_workers", 4)),
+        # More workers overlap CPU-side patch loading with GPU compute.
+        "num_workers": int(cfg.get("num_workers", 8)),
         "pin_memory": bool(cfg.get("pin_memory", True)) and run_device == "cuda",
         "collate_fn": prnu_collate,
     }
     if int(loader_kwargs["num_workers"]) > 0:
+        # Persistent workers amortize startup overhead in Colab notebook loops.
         loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = 2
+        loader_kwargs["prefetch_factor"] = int(cfg.get("prefetch_factor", 2))
         loader_kwargs["multiprocessing_context"] = "spawn"
     batch_size = int(cfg.get("batch_size", 32))
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
+    print(
+        f"[fast-dev] estimated_train_batches={len(train_loader)} "
+        f"batch_size={batch_size} num_workers={loader_kwargs['num_workers']}",
+        flush=True,
+    )
 
     num_classes = len(mapping)
     epochs = int(cfg.get("epochs", 5))
@@ -243,6 +281,9 @@ def main() -> None:
     train_siamese(siam, train_loader, epochs=epochs)
     siam.fit_centroids(train_loader)
     print(f"[fast-dev] siamese_total_train_time_s={time.perf_counter() - t1:.2f}", flush=True)
+    wall_end = datetime.now()
+    print(f"[fast-dev] training_start={wall_start.isoformat()} training_end={wall_end.isoformat()}", flush=True)
+    print(f"[fast-dev] total_wall_time_s={time.perf_counter() - global_start:.2f}", flush=True)
     print("[fast-dev] experiment complete", flush=True)
 
 

@@ -176,6 +176,7 @@ class GPUResidualExtractor:
         device_ids: list[str],
         out_dir: str | Path,
         force: bool = False,
+        target_size: Optional[tuple[int, int]] = None,
     ) -> dict[str, int]:
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -192,7 +193,8 @@ class GPUResidualExtractor:
             kept_paths.append(p)
             kept_devs.append(d)
 
-        ds = PRNUImageDataset(kept_paths, kept_devs)
+        # Optional resize (e.g., 128x128) greatly reduces per-batch GPU denoising cost.
+        ds = PRNUImageDataset(kept_paths, kept_devs, target_size=target_size)
         loader = DataLoader(
             ds,
             batch_size=self.batch_size,

@@ -12,6 +12,7 @@ import bisect
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
+import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -501,6 +502,7 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
         self,
         samples: list[tuple[str, int]],
         patch_size: int = 64,
+        resize_hw: Optional[tuple[int, int]] = None,
         transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
         denoiser: Optional[WienerDenoiser] = None,
         max_patches_per_image: Optional[int] = None,
@@ -529,6 +531,9 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
         """
         self.samples = list(samples)
         self.patch_size = int(patch_size)
+        # Optional fixed resize keeps tensors tiny in fast debug mode (e.g. 128x128),
+        # which dramatically reduces denoising and patch extraction cost.
+        self.resize_hw = tuple(int(x) for x in resize_hw) if resize_hw is not None else None
         self.transform = transform
         self.per_path_transform_factory = per_path_transform_factory
         self.denoiser = denoiser or WienerDenoiser(window_size=3)
@@ -580,15 +585,30 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
             if fast_path:
                 if residual_path is not None and residual_path.is_file():
                     try:
-                        arr = np.load(residual_path, mmap_mode="r")
-                        h, w = int(arr.shape[0]), int(arr.shape[1])
+                        if residual_path.suffix == ".pt":
+                            ten = torch.load(residual_path, map_location="cpu")
+                            if isinstance(ten, torch.Tensor):
+                                arr = ten.numpy()
+                            else:
+                                raise ValueError(
+                                    f"Unexpected .pt residual payload type: {type(ten)}"
+                                )
+                        else:
+                            arr = np.load(residual_path, mmap_mode="r")
+                        if self.resize_hw is not None:
+                            h, w = self.resize_hw
+                        else:
+                            h, w = int(arr.shape[0]), int(arr.shape[1])
                     except Exception:
                         skipped += 1
                         continue
                 else:
                     try:
                         with _PILImage.open(path) as _im:
-                            w, h = _im.size
+                            if self.resize_hw is not None:
+                                h, w = self.resize_hw
+                            else:
+                                w, h = _im.size
                     except Exception:
                         skipped += 1
                         continue
@@ -611,6 +631,9 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
                     except Exception:
                         skipped += 1
                         continue
+                if self.resize_hw is not None:
+                    h_t, w_t = self.resize_hw
+                    u8 = cv2.resize(u8, (w_t, h_t), interpolation=cv2.INTER_AREA)
                 h, w = u8.shape[:2]
             ps = self.patch_size
             nh, nw = h // ps, w // ps
@@ -692,6 +715,11 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
                 res = np.load(residual_path)
             if res.ndim == 2:
                 res = res[..., None]
+            if self.resize_hw is not None:
+                h_t, w_t = self.resize_hw
+                res = cv2.resize(res, (w_t, h_t), interpolation=cv2.INTER_AREA)
+                if res.ndim == 2:
+                    res = res[..., None]
         else:
             rgb = load_image_rgb_float(path)
             u8 = np.clip(rgb, 0, 255).astype(np.uint8)
@@ -699,6 +727,9 @@ class PRNUPatchDataset(Dataset[tuple[torch.Tensor, int, str]]):
                 u8 = self.per_path_transform_factory(path)(u8)
             elif self.transform is not None:
                 u8 = self.transform(u8)
+            if self.resize_hw is not None:
+                h_t, w_t = self.resize_hw
+                u8 = cv2.resize(u8, (w_t, h_t), interpolation=cv2.INTER_AREA)
             rgb = u8.astype(np.float32)
             res = self.denoiser.residual(rgb)
         ps = self.patch_size

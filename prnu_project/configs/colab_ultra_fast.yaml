@@ -1,0 +1,53 @@
+seed: 42
+
+# Set this to your Colab dataset root.
+dresden_root: /content/dresden_dataset/Dresden_Exp
+ieee_sp_root: data/raw/ieee_sp
+fingerprint_dir: data/processed/fingerprints
+patch_cache_hint: data/processed/patches
+residual_cache_dir: data/processed/residuals_ultra_fast
+
+# Master debug switch: applies aggressive speed defaults for quick iteration.
+fast_dev_mode: true
+skip_expensive_preprocessing: true
+
+# Subset controls: keep only a few classes/images for fast runs.
+num_devices: 5
+images_per_device: 200
+fast_num_devices: 5
+fast_images_per_device: 200
+min_images_per_device: 1
+
+# Split ratios
+train_ratio: 0.60
+val_ratio: 0.20
+test_ratio: 0.20
+
+# Image + patch sizes: tiny resolution dramatically cuts CPU/GPU workload.
+image_size: 128
+patch_size: 64
+max_patches_per_image: 10
+wiener_window: 3
+
+# Keep runs extremely short for debugging.
+epochs: 1
+cnn_epochs: 1
+siamese_epochs: 1
+fast_epochs: 1
+batch_size: 32
+cnn_batch_size: 32
+siamese_batch_size: 32
+
+# Optimizer + model
+cnn_lr: 1e-4
+cnn_weight_decay: 1e-4
+siamese_lr: 1e-4
+siamese_margin: 1.0
+siamese_embedding_dim: 128
+
+# GPU throughput
+use_amp: true
+grad_accum_steps: 1
+num_workers: 8
+pin_memory: true
+prefetch_factor: 2
