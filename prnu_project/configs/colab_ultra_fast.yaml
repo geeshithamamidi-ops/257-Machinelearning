@@ -7,6 +7,11 @@ fingerprint_dir: data/processed/fingerprints
 patch_cache_hint: data/processed/patches
 residual_cache_dir: data/processed/residuals_ultra_fast
 
+# Optional: copy outputs/experiment_* to Drive after training (Colab), e.g.
+# /content/drive/MyDrive/prnu_experiments
+# Or set env PRNU_EXPERIMENT_DRIVE_ROOT to the same path.
+experiment_drive_root: ""
+
 # Master debug switch: applies aggressive speed defaults for quick iteration.
 fast_dev_mode: true
 skip_expensive_preprocessing: true

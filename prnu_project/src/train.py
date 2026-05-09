@@ -99,7 +99,7 @@ def train_cnn(
     dict[str, Any]
         Training history with last losses/accuracy.
     """
-    history: dict[str, Any] = {"train_loss": [], "val_acc": []}
+    history: dict[str, Any] = {"train_loss": [], "val_acc": [], "val_loss": []}
     for ep in range(epochs):
         t0 = time.perf_counter()
         loss = clf.train_epoch(train_loader)
@@ -107,6 +107,7 @@ def train_cnn(
         if val_loader is not None:
             ev = clf.evaluate(val_loader)
             history["val_acc"].append(ev["accuracy"])
+            history["val_loss"].append(ev["loss"])
         dt = time.perf_counter() - t0
         timing = getattr(clf, "last_timing", {})
         gpu_mem = 0.0

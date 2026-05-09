@@ -8,12 +8,16 @@ Example:
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import torch
+import yaml
 from torch.utils.data import DataLoader
 
 from src.data_loader import (
@@ -24,12 +28,16 @@ from src.data_loader import (
     build_device_label_map,
     prnu_collate,
 )
-from src.evaluate import image_level_predictions_cnn, top_k_accuracy
+from src.evaluate import (
+    image_level_predictions_cnn,
+    image_level_predictions_siamese,
+    top_k_accuracy,
+)
 from src.gpu_prnu_extractor import GPUResidualExtractor
 from src.models.cnn_classifier import CNNClassifier
 from src.models.siamese_network import SiameseClassifier
 from src.prnu_extraction import WienerDenoiser
-from src.train import load_config, seed_everything, train_cnn, train_siamese
+from src.train import get_git_hash, load_config, seed_everything, train_cnn, train_siamese
 
 
 def _resolve_path(project_root: Path, p: str) -> Path:
@@ -79,6 +87,102 @@ def _log_subset_stats(splits: dict[str, list[tuple[str, str]]], cfg: dict[str, A
         flush=True,
     )
     print(f"[fast-dev] total_samples={len(all_samples)}", flush=True)
+
+
+def _experiment_slug() -> str:
+    """Unique folder name so Colab runs never overwrite prior artifacts."""
+    return f"experiment_{datetime.now().strftime('%Y_%m_%d_%H%M%S')}"
+
+
+def _save_experiment_artifacts(
+    project_root: Path,
+    cfg: dict[str, Any],
+    cnn: CNNClassifier,
+    siam: SiameseClassifier,
+    cnn_history: dict[str, Any],
+    siamese_history: dict[str, Any],
+    metrics_extra: dict[str, Any],
+    config_source_path: Path,
+    wall_start: datetime,
+    wall_end: datetime,
+    global_start: float,
+) -> dict[str, str]:
+    """
+    Persist weights + metrics under timestamped outputs/ and checkpoints/.
+
+    Duplicating weights under checkpoints/ keeps a stable layout for downstream
+    scripts while outputs/ holds the full experiment record (metrics + config).
+    """
+    slug = _experiment_slug()
+    out_root = project_root / "outputs" / slug
+    ckpt_root = project_root / "checkpoints" / slug
+    out_root.mkdir(parents=True, exist_ok=True)
+    ckpt_root.mkdir(parents=True, exist_ok=True)
+
+    cnn_out = out_root / "cnn_model.pth"
+    siam_out = out_root / "siamese_model.pth"
+    cnn.save(cnn_out)
+    siam.save(siam_out)
+    # Same filenames under checkpoints/ (timestamped parent avoids clobbering).
+    cnn_ckpt = ckpt_root / "cnn_model.pth"
+    siam_ckpt = ckpt_root / "siamese_model.pth"
+    shutil.copy2(cnn_out, cnn_ckpt)
+    shutil.copy2(siam_out, siam_ckpt)
+
+    metrics_path = out_root / "metrics.json"
+    payload = {
+        "experiment_slug": slug,
+        "git_hash": get_git_hash(),
+        "cnn": {
+            "train_loss_per_epoch": cnn_history.get("train_loss", []),
+            "val_accuracy_per_epoch": cnn_history.get("val_acc", []),
+            "val_loss_per_epoch": cnn_history.get("val_loss", []),
+        },
+        "siamese": {
+            "train_loss_per_epoch": siamese_history.get("train_loss", []),
+        },
+        **metrics_extra,
+        "runtime": {
+            "wall_start_iso": wall_start.isoformat(),
+            "wall_end_iso": wall_end.isoformat(),
+            "total_wall_s": time.perf_counter() - global_start,
+            "cuda_available": torch.cuda.is_available(),
+            "gpu_name": (
+                torch.cuda.get_device_name(0)
+                if torch.cuda.is_available()
+                else None
+            ),
+        },
+    }
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, default=str)
+
+    cfg_dump = out_root / "config.yaml"
+    with open(cfg_dump, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, default_flow_style=False)
+
+    src_meta = out_root / "config_source.txt"
+    src_meta.write_text(str(config_source_path.resolve()), encoding="utf-8")
+
+    drive_root = str(cfg.get("experiment_drive_root", "") or "").strip() or os.environ.get(
+        "PRNU_EXPERIMENT_DRIVE_ROOT", ""
+    ).strip()
+    drive_copy: str | None = None
+    if drive_root:
+        dest = Path(drive_root).expanduser() / slug
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            dest = Path(drive_root).expanduser() / f"{slug}_copy"
+        shutil.copytree(out_root, dest, dirs_exist_ok=False)
+        drive_copy = str(dest.resolve())
+
+    return {
+        "outputs_dir": str(out_root.resolve()),
+        "checkpoints_dir": str(ckpt_root.resolve()),
+        "metrics_json": str(metrics_path.resolve()),
+        "config_yaml": str(cfg_dump.resolve()),
+        "drive_copy": drive_copy or "",
+    }
 
 
 def _maybe_precompute_subset(
@@ -135,7 +239,8 @@ def main() -> None:
     wall_start = datetime.now()
     global_start = time.perf_counter()
     project_root = Path(__file__).resolve().parents[1]
-    cfg = load_config(_resolve_path(project_root, args.config))
+    config_source_path = _resolve_path(project_root, args.config)
+    cfg = load_config(config_source_path)
     cfg["dresden_root"] = str(_resolve_path(project_root, str(cfg["dresden_root"])))
     residual_root = _resolve_path(
         project_root, str(cfg.get("residual_cache_dir", "data/processed/residuals_fast"))
@@ -260,8 +365,9 @@ def main() -> None:
         grad_accum_steps=int(cfg.get("grad_accum_steps", 1)),
     )
     t0 = time.perf_counter()
-    train_cnn(cnn, train_loader, val_loader, epochs=epochs)
-    print(f"[fast-dev] cnn_total_train_time_s={time.perf_counter() - t0:.2f}", flush=True)
+    cnn_history = train_cnn(cnn, train_loader, val_loader, epochs=epochs)
+    cnn_train_s = time.perf_counter() - t0
+    print(f"[fast-dev] cnn_total_train_time_s={cnn_train_s:.2f}", flush=True)
 
     y_true, y_ranked = image_level_predictions_cnn(cnn, test_loader)
     cnn_top1 = top_k_accuracy(y_true, y_ranked, k=1)
@@ -278,12 +384,61 @@ def main() -> None:
         grad_accum_steps=int(cfg.get("grad_accum_steps", 1)),
     )
     t1 = time.perf_counter()
-    train_siamese(siam, train_loader, epochs=epochs)
+    siamese_history = train_siamese(siam, train_loader, epochs=epochs)
     siam.fit_centroids(train_loader)
-    print(f"[fast-dev] siamese_total_train_time_s={time.perf_counter() - t1:.2f}", flush=True)
+    siamese_train_s = time.perf_counter() - t1
+    print(f"[fast-dev] siamese_total_train_time_s={siamese_train_s:.2f}", flush=True)
+
+    siam_val_top1 = None
+    if len(val_ds) > 0:
+        yt_sv, rk_sv = image_level_predictions_siamese(siam, val_loader)
+        siam_val_top1 = float(top_k_accuracy(yt_sv, rk_sv, k=1))
+    yt_st, rk_st = image_level_predictions_siamese(siam, test_loader)
+    siam_test_top1 = float(top_k_accuracy(yt_st, rk_st, k=1))
+    print(f"[fast-dev] siamese_test_top1={siam_test_top1:.4f}", flush=True)
+
     wall_end = datetime.now()
     print(f"[fast-dev] training_start={wall_start.isoformat()} training_end={wall_end.isoformat()}", flush=True)
     print(f"[fast-dev] total_wall_time_s={time.perf_counter() - global_start:.2f}", flush=True)
+
+    metrics_extra: dict[str, Any] = {
+        "cnn_test_top1": float(cnn_top1),
+        "siamese_val_top1": siam_val_top1,
+        "siamese_test_top1": siam_test_top1,
+        "dataset": {
+            "num_classes": num_classes,
+            "train_images": len(splits["train"]),
+            "val_images": len(splits["val"]),
+            "test_images": len(splits["test"]),
+            "train_patches": len(train_ds),
+            "val_patches": len(val_ds),
+            "test_patches": len(test_ds),
+            "estimated_train_batches": len(train_loader),
+            "batch_size": batch_size,
+        },
+        "training_times_s": {
+            "cnn": cnn_train_s,
+            "siamese": siamese_train_s,
+        },
+        "config_path": str(config_source_path.resolve()),
+    }
+    paths = _save_experiment_artifacts(
+        project_root=project_root,
+        cfg=cfg,
+        cnn=cnn,
+        siam=siam,
+        cnn_history=cnn_history,
+        siamese_history=siamese_history,
+        metrics_extra=metrics_extra,
+        config_source_path=config_source_path,
+        wall_start=wall_start,
+        wall_end=wall_end,
+        global_start=global_start,
+    )
+    print("[fast-dev] saved experiment artifacts:", flush=True)
+    for k, v in paths.items():
+        if v:
+            print(f"  {k}: {v}", flush=True)
     print("[fast-dev] experiment complete", flush=True)
 
 
